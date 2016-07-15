@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import datetime
+import sys
+
 import xml.etree.ElementTree as et
 import pandas as pd
 pd.set_option('display.max_columns', 200)
@@ -10,9 +12,9 @@ pd.set_option('precision', 2)
 import geopy.distance
 
 
-RESAMPLE = 10  # Seconds per FGAI waypoint.
-V_BORING = 10  # Ignore velocities below this [knots].
-Vr = 40        # Tugs Take off speed [knots].
+RESAMPLE = 10  # Seconds per FGFP waypoint.
+V_BORING = 15  # Ignore velocities below this [knots].
+Vr = 45        # Tug take off speed [knots].
 
 
 def fgai(df, ignore_slow=10):
@@ -38,7 +40,7 @@ Format:
     <flightplan>'''
 
     for index, row in df.iterrows():
-        if row['valid']:
+        if row['valid'] == 'true':
             rv += """
         <wpt>
             <name>{n}</name>
@@ -82,8 +84,7 @@ def main(gpx_filename):
     df['lat2'], df['lon2'], df['alt2'] = df['lat'].shift(-1), df['lon'].shift(-1), df['alt'].shift(-1)
     df = df.head(-1)
 
-    # Nautical miles between points.q
-
+    # Nautical miles between points.
     df['nm'] = df.apply(lambda x: geopy.distance.vincenty(
         (x['lat'], x['lon'], x['alt']),
         (x['lat2'], x['lon2'], x['alt'])).nm, axis=1)
@@ -105,5 +106,6 @@ def main(gpx_filename):
 
 
 if __name__ == '__main__':
-    xml = main('flight17.gpx')
+    gpx_filename = sys.argv[1]
+    xml = main(gpx_filename)
     print(xml)
