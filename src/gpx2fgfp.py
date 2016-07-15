@@ -4,20 +4,31 @@ import datetime
 import sys
 
 import xml.etree.ElementTree as et
+import geopy.distance
 import pandas as pd
 pd.set_option('display.max_columns', 200)
 pd.set_option('display.width', 200)
-pd.set_option('precision', 2)
+pd.set_option('precision', 5)
+pd.set_option('max_rows', 10)
 
-import geopy.distance
+"""
+todo:
 
+* Hysteresis for take-off and landing
+* Segment into separate flights
+* Output suggested aircraft's (not AI bot) start lat and lon.
+
+Nice to haves:
+* Better de-noising
+
+"""
 
 RESAMPLE = 10  # Seconds per FGFP waypoint.
-V_BORING = 15  # Ignore velocities below this [knots].
+V_BORING = 6   # Ignore velocities below this [knots].
 Vr = 45        # Tug take off speed [knots].
 
 
-def fgai(df, ignore_slow=10):
+def fgfp(df, ignore_slow=10):
     """
     :param df:
     :param ignore_slow:
@@ -38,6 +49,19 @@ Format:
 -->
 <PropertyList>
     <flightplan>'''
+
+    #ACCEL_THRESH = 15  # Knots
+    #DECEL_THRESH = 4   # Knots
+    #PADDING = 60       #  Seconds.
+
+    """
+    Include samples from PADDING seconds before ACCEL_THRESH is reached
+    and up until PADDING seconds after DECEL_THRESH is reached.
+    Alternatively, a Kalman filter.
+
+    states: stop, taxi, take-off-roll, take-off, flight-towing, flight-free, landing-roll, taxi, stop.
+
+    """
 
     for index, row in df.iterrows():
         if row['valid'] == 'true':
@@ -61,7 +85,7 @@ Format:
     return rv
 
 
-def main(gpx_filename):
+def compute(gpx_filename):
     """
     :param gpx_filename:
     :return:
@@ -77,9 +101,12 @@ def main(gpx_filename):
         times.append(datetime.datetime.strptime(trkpt[1].text, '%Y-%m-%dT%H:%M:%SZ'))
 
     df = pd.DataFrame(trkpts, columns=['n', 'lat', 'lon', 'alt'], index=pd.DatetimeIndex(times), dtype=float)
-    df = df.asfreq("S", method='nearest')
 
-    df = df.resample(str(RESAMPLE) + 'S').mean()
+    df = df.asfreq("S", method='nearest')
+    #print('per second:\n', df)
+
+    df = df.resample(str(RESAMPLE) + 'S').rolling(window=6, min_periods=0, center=True, win_type='hamming', ).mean()
+    #print('downsampled\n', df)
 
     df['lat2'], df['lon2'], df['alt2'] = df['lat'].shift(-1), df['lon'].shift(-1), df['alt'].shift(-1)
     df = df.head(-1)
@@ -100,12 +127,20 @@ def main(gpx_filename):
 
     df['feet'] = df['alt'] * 3.28084 + 0   # todo Offset
 
-    #print(df.head(20))
-    #print(df.tail(20))
-    return fgai(df)
+    return df
 
 
 if __name__ == '__main__':
     gpx_filename = sys.argv[1]
-    xml = main(gpx_filename)
+    df = compute(gpx_filename)
+    xml = fgfp(df)
     print(xml)
+
+    # import matplotlib.pyplot as plt
+    #
+    # df[['alt', 'knots', 'lat', 'lon', ]].plot(subplots=True, grid=True, use_index=True, layout=(2, 2), ) # figsize=(64, 40), )
+    # plt.figure()
+    # plt.scatter(df['lon'], df['lat'])
+    # plt.show()
+    # #plt.savefig('data.png')
+
