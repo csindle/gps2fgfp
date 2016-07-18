@@ -8,12 +8,11 @@ import geopy.distance
 import pandas as pd
 pd.set_option('display.max_columns', 200)
 pd.set_option('display.width', 200)
-pd.set_option('precision', 5)
-pd.set_option('max_rows', 10)
+pd.set_option('precision', 3)
+pd.set_option('max_rows', 20)
 
 """
 todo:
-
 * Hysteresis for take-off and landing
 * Segment into separate flights
 * Output suggested aircraft's (not AI bot) start lat and lon.
@@ -24,8 +23,8 @@ Nice to haves:
 """
 
 RESAMPLE = 10  # Seconds per FGFP waypoint.
-V_BORING = 6   # Ignore velocities below this [knots].
-Vr = 45        # Tug take off speed [knots].
+V_BORING = 13   # Ignore velocities below this [knots].
+Vr = 35        # Tug take off speed [knots].
 
 
 def fgfp(df, ignore_slow=10):
@@ -97,31 +96,46 @@ def compute(gpx_filename):
     times = []
 
     for n, trkpt in enumerate(root[1][4]):
+        stamp = datetime.datetime.strptime(trkpt[1].text, '%Y-%m-%dT%H:%M:%SZ')
         trkpts.append((n, trkpt.get('lat'), trkpt.get('lon'), trkpt[0].text))
-        times.append(datetime.datetime.strptime(trkpt[1].text, '%Y-%m-%dT%H:%M:%SZ'))
+        times.append(stamp)
+        
+    dt = pd.Series(times, index=times).diff()
+    #print('dt\n', dt)
 
     df = pd.DataFrame(trkpts, columns=['n', 'lat', 'lon', 'alt'], index=pd.DatetimeIndex(times), dtype=float)
 
-    df = df.asfreq("S", method='nearest')
-    #print('per second:\n', df)
+    
 
-    df = df.resample(str(RESAMPLE) + 'S').rolling(window=6, min_periods=0, center=True, win_type='hamming', ).mean()
+    #df = df.resample(str(RESAMPLE) + 'S').max()  #  rolling(window=6, min_periods=0, center=True, win_type='hamming', ).mean()
     #print('downsampled\n', df)
 
     df['lat2'], df['lon2'], df['alt2'] = df['lat'].shift(-1), df['lon'].shift(-1), df['alt'].shift(-1)
+    df['dt'] = dt
+    df = df.tail(-1)
+    
+    df['dt_sec'] = df.apply(lambda x: float(x['dt'].seconds), axis=1)
     df = df.head(-1)
-
+    
     # Nautical miles between points.
     df['nm'] = df.apply(lambda x: geopy.distance.vincenty(
         (x['lat'], x['lon'], x['alt']),
-        (x['lat2'], x['lon2'], x['alt'])).nm, axis=1)
+        (x['lat2'], x['lon2'], x['alt2'])).nm, axis=1)
 
     # Knots are NM per hour.
-    df['knots'] = df['nm'] * 3600 / RESAMPLE  # FYI: 1 nm = 1852 m
-
+    df['knots'] = df['nm']/df['dt_sec'] * 3600 #!!! / RESAMPLE  # FYI: 1 nm = 1852 m
+    
+    df = df.asfreq("S", method='nearest')
+    #print('per second:\n', df)
+    
+    df = df.resample(str(RESAMPLE) + 'S').rolling(window=10, min_periods=0, center=True, win_type='hamming', ).mean()
+    #print('rolling', df)
+    
+    
     # Take of at Vr (stop ignoring altitude).
     df['ground'] = df.apply(lambda x: 'false' if x['knots'] > Vr else 'true', axis=1)
 
+    
     # Ignore noisy GPS data.
     df['valid'] = df.apply(lambda x: 'true' if x['knots'] > V_BORING else 'false', axis=1)
 
@@ -136,11 +150,10 @@ if __name__ == '__main__':
     xml = fgfp(df)
     print(xml)
 
-    # import matplotlib.pyplot as plt
-    #
-    # df[['alt', 'knots', 'lat', 'lon', ]].plot(subplots=True, grid=True, use_index=True, layout=(2, 2), ) # figsize=(64, 40), )
-    # plt.figure()
-    # plt.scatter(df['lon'], df['lat'])
-    # plt.show()
-    # #plt.savefig('data.png')
+    #import matplotlib.pyplot as plt
+    #df[['alt', 'knots', 'lat', 'lon', ]].plot(subplots=True, grid=True, use_index=True, layout=(2, 2), ) # figsize=(64, 40), )
+    #plt.figure()
+    #plt.scatter(df['lon'], df['lat'])
+    #plt.show()
+    #plt.savefig('data.png')
 
