@@ -23,7 +23,7 @@ Nice to haves:
 """
 
 RESAMPLE = 10  # Seconds per FGFP waypoint.
-V_BORING = 13   # Ignore velocities below this [knots].
+V_BORING = 7   # Ignore velocities below this [knots].
 Vr = 35        # Tug take off speed [knots].
 
 
@@ -33,7 +33,7 @@ def fgfp(df, ignore_slow=10):
     :param ignore_slow:
     :return:
     """
-    rv = '''<?xml version="1.0"?>
+    HEADER = '''<?xml version="1.0"?>
 <!-- J3 for aerotow
 Format:
     <name>       Waypoint name.  When a waypoint named END is reached the AI airplane will delete itself.
@@ -49,20 +49,26 @@ Format:
 <PropertyList>
     <flightplan>'''
 
-    #ACCEL_THRESH = 15  # Knots
-    #DECEL_THRESH = 4   # Knots
-    #PADDING = 60       #  Seconds.
+    # To split into flights, use:
+    #   csplit --digits=2  --quiet --prefix=part  many.xml   '/___NEW/'  "{*}"
+    FD  = "\n\n<!-- ___NEW_FLIGHT___ -->\n\n"
 
-    """
-    Include samples from PADDING seconds before ACCEL_THRESH is reached
-    and up until PADDING seconds after DECEL_THRESH is reached.
-    Alternatively, a Kalman filter.
-
-    states: stop, taxi, take-off-roll, take-off, flight-towing, flight-free, landing-roll, taxi, stop.
-
-    """
-
+    FOOTER = '''
+        <wpt>
+            <name>END</name>
+        </wpt>
+    </flightplan>
+</PropertyList>
+'''
+    rv = HEADER
+    old_valid = 'false'
+    
     for index, row in df.iterrows():
+        if row['valid'] != old_valid:
+            # Insert flight delimiter:
+            rv += FOOTER + FD + HEADER
+            old_valid = row['valid']
+                    
         if row['valid'] == 'true':
             rv += """
         <wpt>
@@ -74,13 +80,7 @@ Format:
             <on-ground>{ground}</on-ground>
         </wpt>""".format(**row)
 
-    rv += '''
-        <wpt>
-            <name>END</name>
-        </wpt>
-    </flightplan>
-</PropertyList>
-'''
+    rv += FOOTER 
     return rv
 
 
@@ -150,10 +150,10 @@ if __name__ == '__main__':
     xml = fgfp(df)
     print(xml)
 
-    #import matplotlib.pyplot as plt
-    #df[['alt', 'knots', 'lat', 'lon', ]].plot(subplots=True, grid=True, use_index=True, layout=(2, 2), ) # figsize=(64, 40), )
-    #plt.figure()
-    #plt.scatter(df['lon'], df['lat'])
-    #plt.show()
-    #plt.savefig('data.png')
+    import matplotlib.pyplot as plt
+    df[['alt', 'knots', 'lat', 'lon', ]].plot(subplots=True, grid=True, use_index=True, layout=(2, 2), ) # figsize=(64, 40), )
+    plt.figure()
+    plt.scatter(df['lon'], df['lat'])
+    plt.show()
+    plt.savefig('data.png')
 
