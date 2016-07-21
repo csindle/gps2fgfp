@@ -6,9 +6,10 @@ import sys
 import xml.etree.ElementTree as et
 import geopy.distance
 import pandas as pd
+
 pd.set_option('display.max_columns', 200)
 pd.set_option('display.width', 200)
-pd.set_option('precision', 3)
+pd.set_option('precision', 5)
 pd.set_option('max_rows', 20)
 
 """
@@ -16,24 +17,20 @@ todo:
 * Hysteresis for take-off and landing
 * Segment into separate flights
 * Output suggested aircraft's (not AI bot) start lat and lon.
-
-Nice to haves:
-* Better de-noising
-
 """
 
-RESAMPLE = 10  # Seconds per FGFP waypoint.
-V_BORING = 7   # Ignore velocities below this [knots].
+#RESAMPLE = 10  # Seconds per FGFP waypoint.
+#V_BORING = 5   # Ignore velocities below this [knots].
 Vr = 35        # Tug take off speed [knots].
 
+FGTRUE = 'true'
+FGFALSE = 'false'
 
-def fgfp(df, ignore_slow=10):
-    """
-    :param df:
-    :param ignore_slow:
-    :return:
-    """
-    HEADER = '''<?xml version="1.0"?>
+# To split into flights, use:
+#  csplit --quiet  --prefix=flight  --suffix-format %02d.xml   many.xml   '/___NEW_FLIGHT___/'  "{*}"
+FD  = "\n<!-- ___NEW_FLIGHT___ -->\n"
+
+HEADER = '''<?xml version="1.0"?>
 <!-- J3 for aerotow
 Format:
     <name>       Waypoint name.  When a waypoint named END is reached the AI airplane will delete itself.
@@ -48,37 +45,39 @@ Format:
 -->
 <PropertyList>
     <flightplan>'''
-
-    # To split into flights, use:
-    #   csplit --digits=2  --quiet --prefix=part  many.xml   '/___NEW/'  "{*}"
-    FD  = "\n\n<!-- ___NEW_FLIGHT___ -->\n\n"
-
-    FOOTER = '''
+    
+WPT = '''
+        <wpt>
+            <name>{n}</name>
+            <lat>{lat}</lat>
+            <lon>{lon}</lon>
+            <alt>{fasl}</alt>
+            <ktas>{knots}</ktas>
+            <on-ground>{ground}</on-ground>
+        </wpt>'''
+        
+FOOTER = '''
         <wpt>
             <name>END</name>
         </wpt>
     </flightplan>
 </PropertyList>
 '''
+
+
+def fgfp(df):
+    """
+    """
+    old_ground = FGTRUE  # Start on the ground
     rv = HEADER
-    old_valid = 'false'
     
     for index, row in df.iterrows():
-        if row['valid'] != old_valid:
+        if row['ground'] != old_ground:
             # Insert flight delimiter:
             rv += FOOTER + FD + HEADER
-            old_valid = row['valid']
-                    
-        if row['valid'] == 'true':
-            rv += """
-        <wpt>
-            <name>{n}</name>
-            <lat>{lat}</lat>
-            <lon>{lon}</lon>
-            <alt>{feet}</alt>
-            <ktas>{knots}</ktas>
-            <on-ground>{ground}</on-ground>
-        </wpt>""".format(**row)
+            old_ground = row['ground']
+            
+        rv += WPT.format(**row)
 
     rv += FOOTER 
     return rv
@@ -94,52 +93,39 @@ def compute(gpx_filename):
 
     trkpts = []
     times = []
-
+    
     for n, trkpt in enumerate(root[1][4]):
-        stamp = datetime.datetime.strptime(trkpt[1].text, '%Y-%m-%dT%H:%M:%SZ')
-        trkpts.append((n, trkpt.get('lat'), trkpt.get('lon'), trkpt[0].text))
-        times.append(stamp)
-        
-    dt = pd.Series(times, index=times).diff()
-    #print('dt\n', dt)
+        t = datetime.datetime.strptime(trkpt[1].text, '%Y-%m-%dT%H:%M:%SZ')
+        times.append(t)
+        trkpts.append((n, float(trkpt.get('lat')), float(trkpt.get('lon')), float(trkpt[0].text)/1000))
 
-    df = pd.DataFrame(trkpts, columns=['n', 'lat', 'lon', 'alt'], index=pd.DatetimeIndex(times), dtype=float)
+    df = pd.DataFrame(trkpts, columns=['n', 'lat', 'lon', 'kmasl'], index=pd.DatetimeIndex(times), dtype=float)
+    # Feet above sea level
+    df['fasl'] = df['kmasl'] * 3.28084
 
-    
-
-    #df = df.resample(str(RESAMPLE) + 'S').max()  #  rolling(window=6, min_periods=0, center=True, win_type='hamming', ).mean()
-    #print('downsampled\n', df)
-
-    df['lat2'], df['lon2'], df['alt2'] = df['lat'].shift(-1), df['lon'].shift(-1), df['alt'].shift(-1)
-    df['dt'] = dt
-    df = df.tail(-1)
-    
-    df['dt_sec'] = df.apply(lambda x: float(x['dt'].seconds), axis=1)
+    df['dt'] = pd.Series(times, index=times).diff()
+    df['lat2'], df['lon2'], df['kmasl2'], df['dt2'] = df['lat'].shift(-1), df['lon'].shift(-1), df['kmasl'].shift(-1), df['dt'].shift(-1)    
     df = df.head(-1)
+   
+    df['dt_sec'] = df.apply(lambda x: float(x['dt2'].seconds), axis=1)
     
     # Nautical miles between points.
-    df['nm'] = df.apply(lambda x: geopy.distance.vincenty(
-        (x['lat'], x['lon'], x['alt']),
-        (x['lat2'], x['lon2'], x['alt2'])).nm, axis=1)
+    df['d_km'] = df.apply(lambda x: geopy.distance.vincenty(
+        (x['lat'], x['lon'], x['kmasl']),
+        (x['lat2'], x['lon2'], x['kmasl2'])).km, axis=1)
 
-    # Knots are NM per hour.
-    df['knots'] = df['nm']/df['dt_sec'] * 3600 #!!! / RESAMPLE  # FYI: 1 nm = 1852 m
+    df.drop(['lat2', 'lon2', 'kmasl2', 'dt', 'dt2'], axis=1, inplace=True)
+
+    # Knots are 1.852 km per hour.
+    df['knots'] = df['d_km']/df['dt_sec'] / 1.852 * 3600.0
     
-    df = df.asfreq("S", method='nearest')
-    #print('per second:\n', df)
-    
-    df = df.resample(str(RESAMPLE) + 'S').rolling(window=10, min_periods=0, center=True, win_type='hamming', ).mean()
-    #print('rolling', df)
-    
-    
+    #df = df.asfreq("S", method='nearest')
+    df = df.rolling(window=11, min_periods=0, center=True,).mean()
+    # resample(str(RESAMPLE) + 'S').rolling(window=1, min_periods=0, center=True, win_type='hamming', ).mean()    
+        
     # Take of at Vr (stop ignoring altitude).
-    df['ground'] = df.apply(lambda x: 'false' if x['knots'] > Vr else 'true', axis=1)
-
-    
-    # Ignore noisy GPS data.
-    df['valid'] = df.apply(lambda x: 'true' if x['knots'] > V_BORING else 'false', axis=1)
-
-    df['feet'] = df['alt'] * 3.28084 + 0   # todo Offset
+    df['ground'] = df.apply(lambda x: FGFALSE if x['knots'] > Vr else FGTRUE, axis=1)
+    #print(df)
 
     return df
 
@@ -150,10 +136,11 @@ if __name__ == '__main__':
     xml = fgfp(df)
     print(xml)
 
-    import matplotlib.pyplot as plt
-    df[['alt', 'knots', 'lat', 'lon', ]].plot(subplots=True, grid=True, use_index=True, layout=(2, 2), ) # figsize=(64, 40), )
-    plt.figure()
-    plt.scatter(df['lon'], df['lat'])
-    plt.show()
-    plt.savefig('data.png')
+    if 0:
+        import matplotlib.pyplot as plt
+        df[['fasl', 'knots', ]].plot(subplots=True, grid=True, use_index=True, layout=(1, 2), ) # figsize=(64, 40), )
+        plt.figure()
+        plt.plot(df['lon'], df['lat'])
+        plt.show()
+        plt.savefig('data.png')
 
