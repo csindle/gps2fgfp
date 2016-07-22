@@ -27,8 +27,7 @@ FGTRUE = 'true'
 FGFALSE = 'false'
 
 # To split into flights, use:
-#  csplit --quiet  --prefix=flight  --suffix-format %02d.xml   many.xml   '/___NEW_FLIGHT___/'  "{*}"
-FD  = "\n<!-- ___NEW_FLIGHT___ -->\n"
+#  csplit --quiet  --prefix=flight  --suffix-format %02d.xml   many.xml   '/version/'  "{*}"
 
 HEADER = '''<?xml version="1.0"?>
 <!-- J3 for aerotow
@@ -68,14 +67,16 @@ FOOTER = '''
 def fgfp(df):
     """
     """
-    old_ground = FGTRUE  # Start on the ground
+    old_ground = FGTRUE #!!!!
     rv = HEADER
     
     for index, row in df.iterrows():
         if row['ground'] != old_ground:
             # Insert flight delimiter:
-            rv += FOOTER + FD + HEADER
+            rv += FOOTER + HEADER
             old_ground = row['ground']
+            # Insert start position
+            rv += "<!-- - -lat={lat} - -lon={lon} -->".format(**row) 
             
         rv += WPT.format(**row)
 
