@@ -1,3 +1,6 @@
 geopy
 pandas
+pykalman
+# Optional
+matplotlib
 
